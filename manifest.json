@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Auto Hello v2",
-  "version": "2.0",
-  "description": "Sets localStorage for chatgpt.com, opens it, types '안녕', and shows the response as a notification. (Manifest content script)",
+  "name": "ChatGPT Auto Notifier",
+  "version": "3.0",
+  "description": "Automatically interacts with ChatGPT and shows response as a persistent notification.",
   "permissions": [
     "storage",
     "tabs",
@@ -28,6 +28,6 @@
     "default_icon": {
       "48": "images/icon48.png"
     },
-    "default_title": "ChatGPT Auto Hello v2"
+    "default_title": "ChatGPT Auto Notifier"
   }
 }
