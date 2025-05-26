@@ -1,39 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "G마켓 기술블로그 알리미 (v1.10 HTML Fetch)",
-  "version": "1.10",
-  "description": "dev.gmarket.com의 최신 글을 ChatGPT로 요약하여 알려줍니다.",
+  "name": "ChatGPT Auto Hello v2",
+  "version": "2.0",
+  "description": "Sets localStorage for chatgpt.com, opens it, types '안녕', and shows the response as a notification. (Manifest content script)",
   "permissions": [
     "storage",
-    "alarms",
     "tabs",
-    "notifications",
-    "scripting"
+    "notifications"
   ],
   "host_permissions": [
-    "https://dev.gmarket.com/*",
     "https://chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "G마켓 기술블로그 최신 글 보기"
-  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "icons": {
     "48": "images/icon48.png"
   },
-  "content_scripts": [
-    {
-      "matches": ["https://dev.gmarket.com/*"],
-      "js": ["gmarket_tech_content.js"],
-      "run_at": "document_idle"
+  "action": {
+    "default_icon": {
+      "48": "images/icon48.png"
     },
-    {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["chatgpt_content.js"],
-      "run_at": "document_idle"
-    }
-  ]
+    "default_title": "ChatGPT Auto Hello v2"
+  }
 }
