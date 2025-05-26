@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Auto Notifier",
-  "version": "3.0",
-  "description": "Automatically interacts with ChatGPT and shows response as a persistent notification.",
+  "name": "ChatGPT Auto Responder",
+  "version": "5.0",
+  "description": "Sends a user-defined prompt to ChatGPT, gets a response, and shows a notification or opens a link. Can be scheduled.",
   "permissions": [
     "storage",
     "tabs",
-    "notifications"
+    "notifications",
+    "alarms"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -21,13 +22,13 @@
       "run_at": "document_idle"
     }
   ],
-  "icons": {
-    "48": "images/icon48.png"
-  },
   "action": {
+    "default_popup": "popup.html",
     "default_icon": {
       "48": "images/icon48.png"
-    },
-    "default_title": "ChatGPT Auto Notifier"
+    }
+  },
+  "icons": {
+    "48": "images/icon48.png"
   }
 }

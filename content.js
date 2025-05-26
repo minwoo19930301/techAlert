@@ -1,3 +1,5 @@
+// content.js (전체 코드 - 이전 답변과 동일)
+
 async function waitForElement(selector, timeout = 20000) {
     return new Promise((resolve, reject) => {
         const intervalTime = 100;
@@ -39,11 +41,17 @@ async function typeIntoProseMirror(element, text) {
     element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
 }
 
-async function performInitialChatActions() {
+async function performTaskInPage() {
     try {
+        const data = await chrome.storage.local.get(['currentFullQueryToChatGPT']);
+        const fullPrompt = data.currentFullQueryToChatGPT;
+
+        if (!fullPrompt || fullPrompt.trim() === "response this question in Korean and within 20 letters") {
+            return;
+        }
+
         const prosemirrorDiv = await waitForElement('div.ProseMirror#prompt-textarea[contenteditable="true"]');
-        const newPrompt = "오늘 서울 날씨는 뭐야? 15자 내외로 대답해줘";
-        await typeIntoProseMirror(prosemirrorDiv, newPrompt);
+        await typeIntoProseMirror(prosemirrorDiv, fullPrompt);
         await new Promise(resolve => setTimeout(resolve, 200));
         const sendButton = await waitForElement('button[data-testid="send-button"]', 5000);
 
@@ -72,20 +80,41 @@ async function performInitialChatActions() {
             }));
             triggerResponseObservationAfterDelay();
         }
-    } catch (error) {
-        // console.error("Error in performInitialChatActions:", error);
-    }
+    } catch (error) { /* Fail silently */ }
 }
 
-function processAndSendSummary(rawText, observerToDisconnect, timeoutIdToClear) {
-    let finalSummary = rawText.trim();
-    if ((finalSummary.startsWith('"') && finalSummary.endsWith('"')) || (finalSummary.startsWith("'") && finalSummary.endsWith("'"))) {
-        finalSummary = finalSummary.substring(1, finalSummary.length - 1).trim();
-    }
-    if (finalSummary && finalSummary.length > 1 && !finalSummary.toLowerCase().includes("test")) {
+function processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear) {
+    if (!assistantMessageElement) return false;
+
+    const linkElement = assistantMessageElement.querySelector('span.ms-1 a[href]');
+
+    if (linkElement && linkElement.href) {
+        const href = linkElement.href;
+        const linkTextSpan = linkElement.querySelector('span span span');
+        const linkText = linkTextSpan ? linkTextSpan.innerText.trim() : (linkElement.innerText.trim() || "관련 링크");
+
         if (observerToDisconnect) observerToDisconnect.disconnect();
         if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
-        chrome.runtime.sendMessage({ type: 'showNotification', message: finalSummary });
+
+        chrome.runtime.sendMessage({
+            type: 'SHOW_LINK_NOTIFICATION',
+            url: href,
+            title: "ChatGPT 링크 발견",
+            linkText: `"${linkText}" 링크를 열어보세요.`
+        });
+        return true;
+    }
+
+    let textContent = assistantMessageElement.innerText.trim();
+    if ((textContent.startsWith('"') && textContent.endsWith('"')) || (textContent.startsWith("'") && textContent.endsWith("'"))) {
+        textContent = textContent.substring(1, textContent.length - 1).trim();
+    }
+
+    if (textContent && textContent.length > 1 && !textContent.toLowerCase().includes("test")) {
+        if (observerToDisconnect) observerToDisconnect.disconnect();
+        if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
+
+        chrome.runtime.sendMessage({ type: 'SHOW_TEXT_NOTIFICATION', message: textContent, title: "ChatGPT 응답" });
         return true;
     }
     return false;
@@ -126,11 +155,9 @@ function checkResponseCompletionAndProcess(containerElement, observerToDisconnec
 
     const copyButton = lastTurn.querySelector('button[data-testid="copy-turn-action-button"]');
     if (copyButton && copyButton.offsetHeight > 0) {
-        const currentText = assistantMessageElement.innerText.trim();
-        return processAndSendSummary(currentText, observerToDisconnect, timeoutIdToClear);
+        return processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear);
     }
 
-    // Fallback to text stability if copy button isn't the only completion signal or appears late
     const currentText = assistantMessageElement.innerText.trim();
     if (currentText.length < MIN_VALID_LENGTH_FOR_STABILITY_CHECK) {
         lastCheckedText = "";
@@ -147,7 +174,7 @@ function checkResponseCompletionAndProcess(containerElement, observerToDisconnec
     if (textStableConsecutiveChecks >= TEXT_STABLE_CHECKS_NEEDED) {
         lastCheckedText = "";
         textStableConsecutiveChecks = 0;
-        return processAndSendSummary(currentText, observerToDisconnect, timeoutIdToClear);
+        return processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear);
     }
     return false;
 }
@@ -157,7 +184,7 @@ async function observeResponse() {
     let conversationContainer;
     let observer = null;
     let processingTimeoutId = null;
-    const RESPONSE_MAX_WAIT_TIME_MS = 1000;
+    const RESPONSE_MAX_WAIT_TIME_MS = 1500;
 
     lastCheckedText = "";
     textStableConsecutiveChecks = 0;
@@ -190,7 +217,6 @@ async function observeResponse() {
         observer.observe(conversationContainer, { childList: true, subtree: true, characterData: true });
         processingTimeoutId = setTimeout(() => {
             if (!checkResponseCompletionAndProcess(conversationContainer, observer, processingTimeoutId)) {
-                // Final check failed
             }
             cleanupObserver();
         }, RESPONSE_MAX_WAIT_TIME_MS);
@@ -200,9 +226,9 @@ async function observeResponse() {
 }
 
 (async () => {
-    const storage = await chrome.storage.local.get("chatGptInitialActionPending");
-    if (storage.chatGptInitialActionPending) {
-        await performInitialChatActions();
-        await chrome.storage.local.remove("chatGptInitialActionPending");
+    const data = await chrome.storage.local.get("chatGptQueryPending");
+    if (data.chatGptQueryPending) {
+        await chrome.storage.local.remove("chatGptQueryPending");
+        await performTaskInPage();
     }
 })();

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>ChatGPT 작업 설정</title>
+    <style>
+        body { font-family: sans-serif; padding: 15px; width: 300px; font-size: 14px; }
+        h3 { margin-top: 0; text-align: center; }
+        label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
+        textarea { width: 95%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 70px; resize: vertical; }
+        .interval-container { display: flex; align-items: center; margin-bottom: 15px; }
+        .interval-container input[type="number"] {
+            width: 60px; text-align: center; margin: 0 10px; padding: 8px;
+            border: 1px solid #ccc; border-radius: 4px;
+            -moz-appearance: textfield;
+        }
+        .interval-container input[type="number"]::-webkit-outer-spin-button,
+        .interval-container input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .interval-container button {
+            width: 30px; height: 30px; font-size: 16px;
+            border: 1px solid #ccc; background-color: #f0f0f0;
+            cursor: pointer; border-radius: 4px;
+        }
+        .interval-container button:hover { background-color: #e0e0e0; }
+        #startScheduleButton {
+            width: 100%; padding: 10px; font-size: 15px;
+            background-color: #007bff; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+        }
+        #startScheduleButton:hover { background-color: #0056b3; }
+        #statusMessage { margin-top: 15px; font-style: italic; color: #555; text-align: center; min-height: 1.2em; }
+    </style>
+</head>
+<body>
+<h3>ChatGPT 작업 설정</h3>
+
+<label for="mainPrompt">ChatGPT에 보낼 질문:</label>
+<textarea id="mainPrompt" placeholder="여기에 질문을 입력하세요..."></textarea>
+
+<label for="scheduleIntervalValue">반복 간격 (0분 = 반복 안함):</label>
+<div class="interval-container">
+    <button id="decreaseInterval" aria-label="간격 10분 감소">-</button>
+    <input type="number" id="scheduleIntervalValue" value="0" min="0" step="10" readonly>
+    <span> 분</span>
+    <button id="increaseInterval" aria-label="간격 10분 증가">+</button>
+</div>
+
+<button id="startScheduleButton">작업 시작 및 스케줄링</button>
+<div id="statusMessage"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>
