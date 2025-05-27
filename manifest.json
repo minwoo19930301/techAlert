@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Auto Responder",
-  "version": "5.0",
-  "description": "Sends a user-defined prompt to ChatGPT, gets a response, and shows a notification or opens a link. Can be scheduled.",
+  "version": "6.0",
+  "description": "Manages scheduled queries to ChatGPT and provides notifications.",
   "permissions": [
     "storage",
     "tabs",

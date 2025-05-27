@@ -1,4 +1,4 @@
-// content.js (전체 코드 - 이전 답변과 동일)
+// content.js (전체 코드)
 
 async function waitForElement(selector, timeout = 20000) {
     return new Promise((resolve, reject) => {
@@ -45,8 +45,9 @@ async function performTaskInPage() {
     try {
         const data = await chrome.storage.local.get(['currentFullQueryToChatGPT']);
         const fullPrompt = data.currentFullQueryToChatGPT;
+        const fixedPrefixForCheck = "response this question in Korean and within 20 letters and one sentence. Search if necessary";
 
-        if (!fullPrompt || fullPrompt.trim() === "response this question in Korean and within 20 letters") {
+        if (!fullPrompt || fullPrompt.trim() === fixedPrefixForCheck.trim()) {
             return;
         }
 
@@ -59,7 +60,7 @@ async function performTaskInPage() {
             setTimeout(() => {
                 chrome.runtime.sendMessage({ type: "ACTIVATE_CHATGPT_TAB_FOR_RESPONSE" });
                 observeResponse();
-            }, 5000);
+            }, 10000); // ★★★ 포커싱 전 10초 딜레이 ★★★
         };
 
         if (sendButton && !sendButton.disabled) {
@@ -86,44 +87,62 @@ async function performTaskInPage() {
 function processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear) {
     if (!assistantMessageElement) return false;
 
+    let extractedText = assistantMessageElement.innerText.trim();
+
+    // ★★★ "출처" 단어 및 그 앞의 공백, 콜론 등 제거 로직 ★★★
+    const 출처Keywords = ["출처:", "출처 :", "출처"];
+    for (const keyword of 출처Keywords) {
+        if (extractedText.endsWith(keyword)) {
+            extractedText = extractedText.substring(0, extractedText.lastIndexOf(keyword)).trim();
+            break;
+        }
+    }
+    // 추가적으로 끝에 붙은 단순 "출처" 단어만 제거
+    if (extractedText.endsWith("출처")) {
+        extractedText = extractedText.substring(0, extractedText.length - 2).trim();
+    }
+
+
+    let cleanText = extractedText;
+    if ((cleanText.startsWith('"') && cleanText.endsWith('"')) || (cleanText.startsWith("'") && cleanText.endsWith("'"))) {
+        cleanText = cleanText.substring(1, cleanText.length - 1).trim();
+    }
+
+    if (!cleanText || cleanText.length < 1 ) { // "test" 필터는 일단 유지, 길이는 1글자도 허용
+        return false;
+    }
+    if (cleanText.toLowerCase().includes("test")){
+        return false;
+    }
+
+
     const linkElement = assistantMessageElement.querySelector('span.ms-1 a[href]');
+
+    if (observerToDisconnect) observerToDisconnect.disconnect();
+    if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
 
     if (linkElement && linkElement.href) {
         const href = linkElement.href;
-        const linkTextSpan = linkElement.querySelector('span span span');
-        const linkText = linkTextSpan ? linkTextSpan.innerText.trim() : (linkElement.innerText.trim() || "관련 링크");
-
-        if (observerToDisconnect) observerToDisconnect.disconnect();
-        if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
-
         chrome.runtime.sendMessage({
             type: 'SHOW_LINK_NOTIFICATION',
             url: href,
-            title: "ChatGPT 링크 발견",
-            linkText: `"${linkText}" 링크를 열어보세요.`
+            message: cleanText,
+            title: "ChatGPT 응답"
         });
-        return true;
+    } else {
+        chrome.runtime.sendMessage({
+            type: 'SHOW_TEXT_NOTIFICATION',
+            message: cleanText,
+            title: "ChatGPT 응답"
+        });
     }
-
-    let textContent = assistantMessageElement.innerText.trim();
-    if ((textContent.startsWith('"') && textContent.endsWith('"')) || (textContent.startsWith("'") && textContent.endsWith("'"))) {
-        textContent = textContent.substring(1, textContent.length - 1).trim();
-    }
-
-    if (textContent && textContent.length > 1 && !textContent.toLowerCase().includes("test")) {
-        if (observerToDisconnect) observerToDisconnect.disconnect();
-        if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
-
-        chrome.runtime.sendMessage({ type: 'SHOW_TEXT_NOTIFICATION', message: textContent, title: "ChatGPT 응답" });
-        return true;
-    }
-    return false;
+    return true;
 }
 
 let lastCheckedText = "";
 let textStableConsecutiveChecks = 0;
 const TEXT_STABLE_CHECKS_NEEDED = 2;
-const MIN_VALID_LENGTH_FOR_STABILITY_CHECK = 2;
+const MIN_VALID_LENGTH_FOR_STABILITY_CHECK = 1;
 
 function checkResponseCompletionAndProcess(containerElement, observerToDisconnect, timeoutIdToClear) {
     if (!containerElement) return false;
@@ -184,6 +203,7 @@ async function observeResponse() {
     let conversationContainer;
     let observer = null;
     let processingTimeoutId = null;
+    // ★★★ 포커스 후 응답 대기 시간 1.5초로 변경 ★★★
     const RESPONSE_MAX_WAIT_TIME_MS = 1500;
 
     lastCheckedText = "";
@@ -217,6 +237,7 @@ async function observeResponse() {
         observer.observe(conversationContainer, { childList: true, subtree: true, characterData: true });
         processingTimeoutId = setTimeout(() => {
             if (!checkResponseCompletionAndProcess(conversationContainer, observer, processingTimeoutId)) {
+                // Final check failed
             }
             cleanupObserver();
         }, RESPONSE_MAX_WAIT_TIME_MS);

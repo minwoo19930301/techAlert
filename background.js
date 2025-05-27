@@ -1,65 +1,85 @@
 let previousActiveTabId = null;
-const CHATGPT_QUERY_ALARM_NAME = "chatGPTQueryRepeatingAlarm";
-// ★★★ 고정 접미사 내용 변경 ★★★
-const FIXED_PROMPT_SUFFIX = " response this question in Korean and within 20 letters";
+const CHATGPT_QUERY_ALARM_NAME_PREFIX = "queryAlarm_";
+// ★★★ 변경된 고정 접두사 ★★★
+const FIXED_PROMPT_PREFIX = "response this question in Korean and within 20 letters and one sentence. Search if necessary";
 
-async function executeChatGPTQueryTask() {
+async function executeSingleChatGPTTask(task) {
+    if (!task || !task.query || task.query.trim() === "") {
+        return;
+    }
+
     try {
-        const settings = await chrome.storage.local.get(['managedChatGPTQueryTabId', 'userMainQuery']);
-
-        if (settings.managedChatGPTQueryTabId) {
-            try {
-                await chrome.tabs.remove(settings.managedChatGPTQueryTabId);
-            } catch (e) { /* Do nothing if tab already closed */ }
+        const { managedChatGPTQueryTabId } = await chrome.storage.local.get('managedChatGPTQueryTabId');
+        if (managedChatGPTQueryTabId) {
+            try { await chrome.tabs.remove(managedChatGPTQueryTabId); } catch (e) { /* ignore */ }
         }
 
-        const userMainQuery = settings.userMainQuery;
-        if (!userMainQuery || userMainQuery.trim() === "") {
-            return;
-        }
-        const fullPromptForChatGPT = userMainQuery + FIXED_PROMPT_SUFFIX;
+        const fullPromptForChatGPT = FIXED_PROMPT_PREFIX + " " + task.query;
 
         await chrome.storage.local.set({
             chatGptQueryPending: true,
-            currentFullQueryToChatGPT: fullPromptForChatGPT
+            currentFullQueryToChatGPT: fullPromptForChatGPT,
+            currentProcessingTaskId: task.id
         });
 
         chrome.tabs.create({ url: "https://chatgpt.com/", active: false }, (newTab) => {
             if (chrome.runtime.lastError || !newTab || !newTab.id) return;
             chrome.storage.local.set({ managedChatGPTQueryTabId: newTab.id });
         });
+
     } catch (e) { /* Fail silently */ }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({
-        userMainQuery: "",
-        queryScheduleIntervalMinutes: 0,
+        scheduledQueries: [],
         latestQueryResponseUrl: null,
         latestQueryResponseText: "정보 없음"
     });
-    chrome.alarms.clear(CHATGPT_QUERY_ALARM_NAME);
+    chrome.alarms.getAll(alarms => {
+        alarms.forEach(alarm => {
+            if (alarm.name.startsWith(CHATGPT_QUERY_ALARM_NAME_PREFIX)) {
+                chrome.alarms.clear(alarm.name);
+            }
+        });
+    });
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === CHATGPT_QUERY_ALARM_NAME) {
-        executeChatGPTQueryTask();
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name.startsWith(CHATGPT_QUERY_ALARM_NAME_PREFIX)) {
+        const taskId = alarm.name.substring(CHATGPT_QUERY_ALARM_NAME_PREFIX.length);
+        const result = await chrome.storage.local.get({scheduledQueries: []});
+        const taskToRun = result.scheduledQueries.find(task => task.id === taskId);
+        if (taskToRun) {
+            executeSingleChatGPTTask(taskToRun);
+        } else {
+            chrome.alarms.clear(alarm.name);
+        }
     }
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === "START_CHATGPT_QUERY_TASK") {
-        executeChatGPTQueryTask();
-        chrome.alarms.clear(CHATGPT_QUERY_ALARM_NAME, () => {
-            if (request.scheduleIntervalMinutes && request.scheduleIntervalMinutes > 0) {
-                chrome.alarms.create(CHATGPT_QUERY_ALARM_NAME, {
-                    delayInMinutes: request.scheduleIntervalMinutes,
-                    periodInMinutes: request.scheduleIntervalMinutes
+    if (request.type === "EXECUTE_AND_SCHEDULE_TASK") {
+        const task = request.task;
+        executeSingleChatGPTTask(task);
+
+        const alarmName = `${CHATGPT_QUERY_ALARM_NAME_PREFIX}${task.id}`;
+        chrome.alarms.clear(alarmName, () => {
+            if (task.interval && task.interval > 0) {
+                chrome.alarms.create(alarmName, {
+                    delayInMinutes: task.interval,
+                    periodInMinutes: task.interval
                 });
                 sendResponse({ status: "task_scheduled_and_running" });
             } else {
                 sendResponse({ status: "task_started_no_schedule" });
             }
+        });
+        return true;
+    } else if (request.type === "CANCEL_SCHEDULED_TASK") {
+        const alarmName = `${CHATGPT_QUERY_ALARM_NAME_PREFIX}${request.taskId}`;
+        chrome.alarms.clear(alarmName, (wasCleared) => {
+            sendResponse({ status: wasCleared ? "schedule_cancelled" : "alarm_not_found" });
         });
         return true;
     } else if (request.type === "ACTIVATE_CHATGPT_TAB_FOR_RESPONSE") {
@@ -87,8 +107,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const notificationOptions = {
             type: 'basic',
             iconUrl: chrome.runtime.getURL("images/icon48.png"),
-            title: request.title || (isLinkType ? 'ChatGPT 링크 발견' : 'ChatGPT 응답'),
-            message: isLinkType ? (request.linkText || "링크를 클릭하여 확인하세요.") : request.message,
+            title: "ChatGPT 응답",
+            message: request.message,
             priority: 2,
             requireInteraction: true
         };
@@ -98,7 +118,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         chrome.storage.local.set({
             latestQueryResponseUrl: isLinkType ? request.url : null,
-            latestQueryResponseText: isLinkType ? request.linkText : request.message,
+            isLinkNotification: isLinkType
         });
 
         chrome.notifications.create('chatGPTQueryNotification-' + Date.now(), notificationOptions, () => {});
@@ -127,8 +147,8 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
     if (notificationId.startsWith('chatGPTQueryNotification-')) {
-        const data = await chrome.storage.local.get('latestQueryResponseUrl');
-        if (data.latestQueryResponseUrl) {
+        const data = await chrome.storage.local.get(['latestQueryResponseUrl', 'isLinkNotification']);
+        if (data.isLinkNotification && data.latestQueryResponseUrl) {
             chrome.tabs.create({ url: data.latestQueryResponseUrl });
         }
     }

@@ -2,53 +2,171 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>ChatGPT 작업 설정</title>
+    <title>ChatGPT 스케줄러</title>
     <style>
-        body { font-family: sans-serif; padding: 15px; width: 300px; font-size: 14px; }
-        h3 { margin-top: 0; text-align: center; }
-        label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
-        textarea { width: 95%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 70px; resize: vertical; }
-        .interval-container { display: flex; align-items: center; margin-bottom: 15px; }
-        .interval-container input[type="number"] {
-            width: 60px; text-align: center; margin: 0 10px; padding: 8px;
-            border: 1px solid #ccc; border-radius: 4px;
-            -moz-appearance: textfield;
+        body {
+            font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace, sans-serif;
+            padding: 15px;
+            width: 380px;
+            font-size: 13px;
+            box-sizing: border-box;
+            background-color: #282c34; /* One Dark BG */
+            color: #abb2bf; /* One Dark Text */
         }
-        .interval-container input[type="number"]::-webkit-outer-spin-button,
-        .interval-container input[type="number"]::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
+        h3, h4 {
+            text-align: center;
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #61afef; /* One Dark Blue Accent */
         }
-        .interval-container button {
-            width: 30px; height: 30px; font-size: 16px;
-            border: 1px solid #ccc; background-color: #f0f0f0;
-            cursor: pointer; border-radius: 4px;
+        label {
+            display: block;
+            margin-top: 10px;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 0.9em;
+            color: #98c379; /* One Dark Green Accent */
         }
-        .interval-container button:hover { background-color: #e0e0e0; }
-        #startScheduleButton {
-            width: 100%; padding: 10px; font-size: 15px;
-            background-color: #007bff; color: white;
-            border: none; border-radius: 4px; cursor: pointer;
+
+        .schedule-list-container {
+            margin-bottom: 15px;
+            max-height: 140px;
+            overflow-y: auto;
+            border: 1px solid #3c4049; /* Darker Border */
+            padding: 5px;
+            background-color: #21252b; /* Slightly Lighter Dark BG */
+            border-radius: 4px;
         }
-        #startScheduleButton:hover { background-color: #0056b3; }
-        #statusMessage { margin-top: 15px; font-style: italic; color: #555; text-align: center; min-height: 1.2em; }
+        .schedule-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #3c4049;
+            font-size: 12px;
+            color: #abb2bf;
+        }
+        .schedule-item:last-child { border-bottom: none; }
+        .schedule-text {
+            flex-grow: 1;
+            margin-right: 8px;
+            word-break: break-all;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .schedule-interval {
+            white-space: nowrap;
+            margin-right:8px;
+            color: #61afef; /* Blue Accent */
+            font-size: 0.95em;
+        }
+        .delete-schedule-btn {
+            padding: 3px 8px;
+            font-size: 12px;
+            color: #282c34; /* Dark text for light button */
+            background-color: #e06c75; /* One Dark Red Accent */
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .delete-schedule-btn:hover { background-color: #be5046; } /* Darker Red */
+
+        .add-schedule-section {
+            padding-top:15px;
+            border-top: 2px solid #61afef; /* Blue Accent */
+            margin-top: 15px;
+        }
+        .add-schedule-section h4 { margin-bottom: 10px; }
+
+        textarea#newQueryText {
+            width: 100%; /* Full width */
+            box-sizing: border-box;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #3c4049;
+            border-radius: 4px;
+            min-height: 60px;
+            resize: vertical;
+            font-size:13px;
+            background-color: #21252b;
+            color: #abb2bf;
+        }
+
+        .controls-row { /* New container for interval and add button */
+            display: flex;
+            align-items: flex-end; /* Align items to the bottom */
+            gap: 10px;
+            margin-top: 5px;
+        }
+
+        .interval-input-group { /* Group for label and interval controls */
+            display: flex;
+            flex-direction: column;
+        }
+        .interval-controls {
+            display: flex;
+            align-items: center;
+        }
+        .interval-controls input[type="number"] {
+            width: 45px; text-align: center; margin: 0 5px; padding: 7px;
+            border: 1px solid #3c4049; border-radius: 4px;
+            -moz-appearance: textfield; font-size: 13px;
+            background-color: #21252b; color: #abb2bf;
+        }
+        .interval-controls input[type="number"]::-webkit-outer-spin-button,
+        .interval-controls input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none; margin: 0;
+        }
+        .interval-controls button {
+            width: 28px; height: 31px; font-size: 16px;
+            border: 1px solid #565c64; background-color: #3c4049;
+            color: #abb2bf;
+            cursor: pointer; border-radius: 4px; line-height:28px;
+        }
+        .interval-controls button:hover { background-color: #4a4e58; }
+
+        .add-button-group {
+            margin-left: auto; /* Pushes the add button to the right */
+        }
+
+        #addScheduleButton {
+            padding: 8px 15px; font-size: 14px;
+            background-color: #98c379; /* One Dark Green Accent */
+            color: #282c34; /* Dark text for contrast */
+            border: none; border-radius: 4px; cursor: pointer; height: 33px;
+        }
+        #addScheduleButton:hover { background-color: #89b06e; } /* Darker Green */
+        #statusMessage { margin-top: 15px; font-style: italic; color: #c678dd; /* Purple for status */ text-align: center; min-height: 1.2em; }
     </style>
 </head>
 <body>
-<h3>ChatGPT 작업 설정</h3>
+<h3>ChatGPT 작업 스케줄러</h3>
 
-<label for="mainPrompt">ChatGPT에 보낼 질문:</label>
-<textarea id="mainPrompt" placeholder="여기에 질문을 입력하세요..."></textarea>
-
-<label for="scheduleIntervalValue">반복 간격 (0분 = 반복 안함):</label>
-<div class="interval-container">
-    <button id="decreaseInterval" aria-label="간격 10분 감소">-</button>
-    <input type="number" id="scheduleIntervalValue" value="0" min="0" step="10" readonly>
-    <span> 분</span>
-    <button id="increaseInterval" aria-label="간격 10분 증가">+</button>
+<h4>등록된 스케줄</h4>
+<div id="schedulesListContainer" class="schedule-list-container">
+    <p id="noSchedules" style="text-align:center; color:#777;">등록된 스케줄이 없습니다.</p>
 </div>
 
-<button id="startScheduleButton">작업 시작 및 스케줄링</button>
+<div class="add-schedule-section">
+    <h4>새 스케줄 추가</h4>
+    <label for="newQueryText">질문 내용:</label>
+    <textarea id="newQueryText" placeholder="ChatGPT에 보낼 질문..."></textarea>
+
+    <div class="controls-row">
+        <div class="interval-input-group">
+            <label for="newQueryInterval">반복(분):</label>
+            <div class="interval-controls">
+                <button id="decreaseIntervalBtn" aria-label="간격 1분 감소">-</button>
+                <input type="number" id="newQueryInterval" value="0" min="0" step="1" readonly>
+                <button id="increaseIntervalBtn" aria-label="간격 1분 증가">+</button>
+            </div>
+        </div>
+        <div class="add-button-group">
+            <button id="addScheduleButton">추가</button>
+        </div>
+    </div>
+</div>
 <div id="statusMessage"></div>
 
 <script src="popup.js"></script>
