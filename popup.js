@@ -1,3 +1,4 @@
+// popup.js
 document.addEventListener('DOMContentLoaded', () => {
     const newQueryTextarea = document.getElementById('newQueryText');
     const newQueryIntervalInput = document.getElementById('newQueryInterval');
@@ -29,11 +30,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const intervalSpan = document.createElement('span');
             intervalSpan.className = 'schedule-interval';
-            intervalSpan.textContent = schedule.interval > 0 ? `${schedule.interval}분 간격` : '반복 안함';
+            intervalSpan.textContent = schedule.interval > 0 ? `Every ${schedule.interval} min` : 'No Repeat';
 
             const deleteBtn = document.createElement('button');
             deleteBtn.className = 'delete-schedule-btn';
-            deleteBtn.textContent = '삭제';
+            deleteBtn.textContent = 'Delete';
             deleteBtn.addEventListener('click', () => {
                 deleteSchedule(schedule.id);
             });
@@ -67,8 +68,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const interval = parseInt(newQueryIntervalInput.value, 10);
 
         if (!query) {
-            statusMessage.textContent = '오류: 질문 내용을 입력해주세요.';
-            statusMessage.style.color = '#e06c75'; // One Dark Red for error
+            statusMessage.textContent = 'Error: Query content cannot be empty.';
+            statusMessage.style.color = '#e06c75';
             return;
         }
 
@@ -84,23 +85,19 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({scheduledQueries: updatedSchedules}, () => {
             loadSchedulesFromStorage();
             newQueryTextarea.value = '';
-            statusMessage.textContent = '스케줄이 추가되고 즉시 실행됩니다.';
-            statusMessage.style.color = '#98c379'; // One Dark Green for success
 
             chrome.runtime.sendMessage({
                 type: "EXECUTE_AND_SCHEDULE_TASK",
                 task: newSchedule
             }, (response) => {
                 if (chrome.runtime.lastError) {
-                    statusMessage.textContent = '오류: ' + chrome.runtime.lastError.message;
+                    statusMessage.textContent = 'Error sending task.';
                     statusMessage.style.color = '#e06c75';
                 } else if (response && response.status) {
-                    if(response.status === "task_scheduled_and_running") {
-                        statusMessage.textContent = `즉시 실행, ${newSchedule.interval}분 간격 반복 설정됨.`;
+                    if (response.status === "task_scheduled_and_running") {
+                        statusMessage.textContent = `Running, repeats every ${newSchedule.interval} min.`;
                     } else if (response.status === "task_started_no_schedule") {
-                        statusMessage.textContent = '즉시 실행됨 (반복 안함).';
-                    } else {
-                        statusMessage.textContent = '작업 상태: ' + response.status;
+                        statusMessage.textContent = 'Running (no repeat).';
                     }
                     statusMessage.style.color = '#98c379';
                 }
@@ -113,8 +110,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const updatedSchedules = result.scheduledQueries.filter(s => s.id !== scheduleId);
         chrome.storage.local.set({scheduledQueries: updatedSchedules}, () => {
             loadSchedulesFromStorage();
-            statusMessage.textContent = '스케줄이 삭제되었습니다.';
-            statusMessage.style.color = '#e5c07b'; // One Dark Yellow for warning/info
+            statusMessage.textContent = 'Schedule deleted.';
+            statusMessage.style.color = '#e5c07b';
             chrome.runtime.sendMessage({
                 type: "CANCEL_SCHEDULED_TASK",
                 taskId: scheduleId

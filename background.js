@@ -1,7 +1,6 @@
+// background.js
 let previousActiveTabId = null;
 const CHATGPT_QUERY_ALARM_NAME_PREFIX = "queryAlarm_";
-// ★★★ 변경된 고정 접두사 ★★★
-const FIXED_PROMPT_PREFIX = "response this question in Korean and within 20 letters and one sentence. Search if necessary";
 
 async function executeSingleChatGPTTask(task) {
     if (!task || !task.query || task.query.trim() === "") {
@@ -11,30 +10,41 @@ async function executeSingleChatGPTTask(task) {
     try {
         const { managedChatGPTQueryTabId } = await chrome.storage.local.get('managedChatGPTQueryTabId');
         if (managedChatGPTQueryTabId) {
-            try { await chrome.tabs.remove(managedChatGPTQueryTabId); } catch (e) { /* ignore */ }
+            try { await chrome.tabs.remove(managedChatGPTQueryTabId); } catch (e) {}
         }
 
-        const fullPromptForChatGPT = FIXED_PROMPT_PREFIX + " " + task.query;
+        const userMainQuery = task.query;
+        const today = new Date();
+        const dynamicDatePart = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(today);
+        const instructionPart = "Response this question by the language in the user's query and within 20 letters and one sentence. " +
+            "Always search necessary and return only one reference link (pick in official - news - blog order) in the end of the response: ";
+        const fullPromptForChatGPT = `Today is ${dynamicDatePart}. ${instructionPart}${userMainQuery}`;
 
         await chrome.storage.local.set({
             chatGptQueryPending: true,
             currentFullQueryToChatGPT: fullPromptForChatGPT,
-            currentProcessingTaskId: task.id
+            currentProcessingTaskId: task.id,
+            currentOriginalQuery: task.query
         });
 
         chrome.tabs.create({ url: "https://chatgpt.com/", active: false }, (newTab) => {
-            if (chrome.runtime.lastError || !newTab || !newTab.id) return;
-            chrome.storage.local.set({ managedChatGPTQueryTabId: newTab.id });
+            if (chrome.runtime.lastError || !newTab || !newTab.id) {
+                chrome.storage.local.remove(['chatGptQueryPending', 'currentFullQueryToChatGPT', 'currentProcessingTaskId', 'currentOriginalQuery']);
+                return;
+            }
+            chrome.storage.local.set({ managedChatGPTQueryTabId: newTab.id, chatgptTabProgrammaticallyFocused: false });
         });
 
-    } catch (e) { /* Fail silently */ }
+    } catch (e) {
+        chrome.storage.local.remove(['chatGptQueryPending', 'currentFullQueryToChatGPT', 'currentProcessingTaskId', 'currentOriginalQuery']);
+    }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({
         scheduledQueries: [],
         latestQueryResponseUrl: null,
-        latestQueryResponseText: "정보 없음"
+        latestQueryResponseText: "No information yet."
     });
     chrome.alarms.getAll(alarms => {
         alarms.forEach(alarm => {
@@ -97,46 +107,91 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await chrome.tabs.update(tabIdToFocus, { active: true });
                     const tabDetails = await chrome.tabs.get(tabIdToFocus);
                     if (tabDetails) await chrome.windows.update(tabDetails.windowId, { focused: true });
+                    await chrome.storage.local.set({ chatgptTabProgrammaticallyFocused: tabIdToFocus });
                     sendResponse({ status: "focus_attempted_successfully" });
                 } catch (e) { sendResponse({ status: "error_during_focus_op" }); }
             } else { sendResponse({ status: "no_tab_id_to_focus" }); }
         })();
         return true;
-    } else if (request.type === "SHOW_TEXT_NOTIFICATION" || request.type === "SHOW_LINK_NOTIFICATION") {
-        const isLinkType = request.type === "SHOW_LINK_NOTIFICATION" && request.url;
+    } else if (request.type === "SHOW_FINAL_RESPONSE") {
+        chrome.storage.local.remove(['chatGptQueryPending', 'currentFullQueryToChatGPT', 'currentProcessingTaskId', 'currentOriginalQuery']);
+
         const notificationOptions = {
             type: 'basic',
             iconUrl: chrome.runtime.getURL("images/icon48.png"),
-            title: "ChatGPT 응답",
-            message: request.message,
+            title: "ChatGPT Response",
+            message: request.text,
             priority: 2,
             requireInteraction: true
         };
-        if (isLinkType) {
-            notificationOptions.buttons = [{ title: '링크 열기' }];
-        }
 
-        chrome.storage.local.set({
-            latestQueryResponseUrl: isLinkType ? request.url : null,
-            isLinkNotification: isLinkType
-        });
+        chrome.storage.local.set({ latestQueryResponseUrl: request.url || null });
 
         chrome.notifications.create('chatGPTQueryNotification-' + Date.now(), notificationOptions, () => {});
 
-        if (previousActiveTabId) {
-            chrome.tabs.get(previousActiveTabId, (prevTabDetails) => {
-                if (prevTabDetails) chrome.tabs.update(previousActiveTabId, { active: true });
+        (async () => {
+            const data = await chrome.storage.local.get(['managedChatGPTQueryTabId', 'chatgptTabProgrammaticallyFocused']);
+            const tabIdThatResponded = data.managedChatGPTQueryTabId;
+            const programmaticallyFocusedTabId = data.chatgptTabProgrammaticallyFocused;
+
+            if (previousActiveTabId) {
+                try {
+                    const prevTabDetails = await chrome.tabs.get(previousActiveTabId);
+                    if (prevTabDetails) await chrome.tabs.update(previousActiveTabId, { active: true });
+                } catch(e) { }
                 previousActiveTabId = null;
-            });
-        }
+            }
+
+            if (tabIdThatResponded && tabIdThatResponded === programmaticallyFocusedTabId) {
+                setTimeout(async () => {
+                    try {
+                        await chrome.tabs.get(tabIdThatResponded);
+                        await chrome.tabs.remove(tabIdThatResponded);
+                        const currentData = await chrome.storage.local.get('managedChatGPTQueryTabId');
+                        if (currentData.managedChatGPTQueryTabId === tabIdThatResponded) {
+                            await chrome.storage.local.remove('managedChatGPTQueryTabId');
+                        }
+                    } catch (e) { }
+                    await chrome.storage.local.remove('chatgptTabProgrammaticallyFocused');
+                }, 5000);
+            } else {
+                await chrome.storage.local.remove('chatgptTabProgrammaticallyFocused');
+            }
+        })();
         sendResponse({status: "notification_processed"});
+        return true;
+    } else if (request.type === "CHATGPT_CONTENT_FAILED_PERMANENTLY") {
+        (async () => {
+            const { managedChatGPTQueryTabId, currentOriginalQuery } = await chrome.storage.local.get(['managedChatGPTQueryTabId', 'currentOriginalQuery']);
+            if (managedChatGPTQueryTabId) {
+                try { await chrome.tabs.remove(managedChatGPTQueryTabId); } catch(e) { }
+            }
+            await chrome.storage.local.remove([
+                'chatGptQueryPending',
+                'currentFullQueryToChatGPT',
+                'currentProcessingTaskId',
+                'managedChatGPTQueryTabId',
+                'chatgptTabProgrammaticallyFocused',
+                'currentOriginalQuery'
+            ]);
+            if (currentOriginalQuery) {
+                chrome.notifications.create('chatGPTQueryFailNotification-' + Date.now(), {
+                    type: 'basic',
+                    iconUrl: chrome.runtime.getURL("images/icon48.png"),
+                    title: "ChatGPT Task Failed",
+                    message: `Query "${currentOriginalQuery.substring(0,30)}..." failed after multiple attempts.`,
+                    priority: 1
+                });
+            }
+            sendResponse({status: "permanent_failure_acknowledged"});
+        })();
         return true;
     }
     return false;
 });
 
-chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
-    if (notificationId.startsWith('chatGPTQueryNotification-') && buttonIndex === 0) {
+chrome.notifications.onClicked.addListener(async (notificationId) => {
+    if (notificationId.startsWith('chatGPTQueryNotification-') || notificationId.startsWith('chatGPTQueryFailNotification-')) {
         const data = await chrome.storage.local.get('latestQueryResponseUrl');
         if (data.latestQueryResponseUrl) {
             chrome.tabs.create({ url: data.latestQueryResponseUrl });
@@ -145,20 +200,13 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     chrome.notifications.clear(notificationId);
 });
 
-chrome.notifications.onClicked.addListener(async (notificationId) => {
-    if (notificationId.startsWith('chatGPTQueryNotification-')) {
-        const data = await chrome.storage.local.get(['latestQueryResponseUrl', 'isLinkNotification']);
-        if (data.isLinkNotification && data.latestQueryResponseUrl) {
-            chrome.tabs.create({ url: data.latestQueryResponseUrl });
-        }
-    }
-    chrome.notifications.clear(notificationId);
-});
-
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-    const data = await chrome.storage.local.get('managedChatGPTQueryTabId');
+    const data = await chrome.storage.local.get(['managedChatGPTQueryTabId', 'chatgptTabProgrammaticallyFocused']);
     if (data.managedChatGPTQueryTabId && tabId === data.managedChatGPTQueryTabId) {
         await chrome.storage.local.remove('managedChatGPTQueryTabId');
-        if (previousActiveTabId === tabId) previousActiveTabId = null;
     }
+    if (data.chatgptTabProgrammaticallyFocused && tabId === data.chatgptTabProgrammaticallyFocused) {
+        await chrome.storage.local.remove('chatgptTabProgrammaticallyFocused');
+    }
+    if (previousActiveTabId === tabId) previousActiveTabId = null;
 });

@@ -1,4 +1,42 @@
-// content.js (전체 코드)
+// content.js
+let responseStabilityTimerId = null;
+let lastResponseLength = 0;
+const RESPONSE_STABILITY_TIMEOUT_MS = 1500;
+
+let _observerForStabilityCb;
+let _mainTimeoutIdForStabilityCb;
+let _elementForStabilityCb;
+
+const CHATGPT_ERROR_MESSAGE_SELECTOR = 'div.text-token-text-error.border-token-surface-error\\/15';
+const MAX_CONTENT_RETRIES = 1;
+const RETRY_COUNTER_SESSION_KEY = 'chatGPTContentRetryCount_v2';
+
+function cleanupObservingResources(observer, timeoutId) {
+    if (observer) {
+        observer.disconnect();
+    }
+    if (timeoutId) {
+        clearTimeout(timeoutId);
+    }
+    resetStabilityState();
+}
+
+function handlePageErrorAndRetry(observer, mainTimeoutId) {
+    const errorElement = document.querySelector(CHATGPT_ERROR_MESSAGE_SELECTOR);
+    if (errorElement && errorElement.offsetParent !== null) {
+        let retries = parseInt(sessionStorage.getItem(RETRY_COUNTER_SESSION_KEY) || '0');
+        cleanupObservingResources(observer, mainTimeoutId);
+        if (retries < MAX_CONTENT_RETRIES) {
+            sessionStorage.setItem(RETRY_COUNTER_SESSION_KEY, (retries + 1).toString());
+            window.location.reload();
+        } else {
+            sessionStorage.removeItem(RETRY_COUNTER_SESSION_KEY);
+            chrome.runtime.sendMessage({ type: "CHATGPT_CONTENT_FAILED_PERMANENTLY" });
+        }
+        return true;
+    }
+    return false;
+}
 
 async function waitForElement(selector, timeout = 20000) {
     return new Promise((resolve, reject) => {
@@ -13,7 +51,7 @@ async function waitForElement(selector, timeout = 20000) {
             elapsedTime += intervalTime;
             if (elapsedTime >= timeout) {
                 clearInterval(interval);
-                reject(new Error(`Timeout: ${selector}`));
+                reject(new Error(`Timeout waiting for element: ${selector}`));
             }
         }, intervalTime);
     });
@@ -38,29 +76,31 @@ async function typeIntoProseMirror(element, text) {
         newBr.className = 'ProseMirror-trailingBreak';
         pTag.appendChild(newBr);
     }
-    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    element.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
 }
 
 async function performTaskInPage() {
     try {
         const data = await chrome.storage.local.get(['currentFullQueryToChatGPT']);
         const fullPrompt = data.currentFullQueryToChatGPT;
-        const fixedPrefixForCheck = "response this question in Korean and within 20 letters and one sentence. Search if necessary";
-
-        if (!fullPrompt || fullPrompt.trim() === fixedPrefixForCheck.trim()) {
+        if (!fullPrompt) {
             return;
         }
 
         const prosemirrorDiv = await waitForElement('div.ProseMirror#prompt-textarea[contenteditable="true"]');
         await typeIntoProseMirror(prosemirrorDiv, fullPrompt);
         await new Promise(resolve => setTimeout(resolve, 200));
-        const sendButton = await waitForElement('button[data-testid="send-button"]', 5000);
+
+        const sendButton = await waitForElement('button[data-testid="send-button"]');
 
         const triggerResponseObservationAfterDelay = () => {
             setTimeout(() => {
-                chrome.runtime.sendMessage({ type: "ACTIVATE_CHATGPT_TAB_FOR_RESPONSE" });
+                chrome.runtime.sendMessage({type: "ACTIVATE_CHATGPT_TAB_FOR_RESPONSE"}, (response) => {
+                    if (chrome.runtime.lastError) {
+                    }
+                });
                 observeResponse();
-            }, 10000); // ★★★ 포커싱 전 10초 딜레이 ★★★
+            }, 15000); // Increased delay to 15 seconds
         };
 
         if (sendButton && !sendButton.disabled) {
@@ -74,182 +114,224 @@ async function performTaskInPage() {
                     triggerResponseObservationAfterDelay();
                 }
             });
-            buttonObserver.observe(sendButton, { attributes: true, attributeFilter: ['disabled'] });
+            buttonObserver.observe(sendButton, {attributes: true, attributeFilter: ['disabled']});
         } else {
             prosemirrorDiv.dispatchEvent(new KeyboardEvent('keydown', {
                 key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, composed: true
             }));
             triggerResponseObservationAfterDelay();
         }
-    } catch (error) { /* Fail silently */ }
+    } catch (error) {
+    }
 }
 
-function processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear) {
+function resetStabilityState() {
+    if (responseStabilityTimerId) {
+        clearTimeout(responseStabilityTimerId);
+        responseStabilityTimerId = null;
+    }
+    lastResponseLength = 0;
+}
+
+function processAndSendResult(assistantMessageElement, observerToDisconnect, mainProcessingTimeoutId) {
     if (!assistantMessageElement) return false;
 
     let extractedText = assistantMessageElement.innerText.trim();
 
-    // ★★★ "출처" 단어 및 그 앞의 공백, 콜론 등 제거 로직 ★★★
-    const 출처Keywords = ["출처:", "출처 :", "출처"];
-    for (const keyword of 출처Keywords) {
+    const sourceKeywords = ["출처:", "출처 :", "출처", "Source: ", "Source : ", "Source "];
+    for (const keyword of sourceKeywords) {
         if (extractedText.endsWith(keyword)) {
             extractedText = extractedText.substring(0, extractedText.lastIndexOf(keyword)).trim();
             break;
         }
     }
-    // 추가적으로 끝에 붙은 단순 "출처" 단어만 제거
-    if (extractedText.endsWith("출처")) {
-        extractedText = extractedText.substring(0, extractedText.length - 2).trim();
-    }
-
 
     let cleanText = extractedText;
     if ((cleanText.startsWith('"') && cleanText.endsWith('"')) || (cleanText.startsWith("'") && cleanText.endsWith("'"))) {
         cleanText = cleanText.substring(1, cleanText.length - 1).trim();
     }
 
-    if (!cleanText || cleanText.length < 1 ) { // "test" 필터는 일단 유지, 길이는 1글자도 허용
+    if (!cleanText || cleanText.length < 1 || cleanText.toLowerCase().includes("test")) {
+        resetStabilityState();
         return false;
     }
-    if (cleanText.toLowerCase().includes("test")){
-        return false;
-    }
-
 
     const linkElement = assistantMessageElement.querySelector('span.ms-1 a[href]');
-
-    if (observerToDisconnect) observerToDisconnect.disconnect();
-    if (timeoutIdToClear) clearTimeout(timeoutIdToClear);
-
+    let foundUrl = null;
     if (linkElement && linkElement.href) {
-        const href = linkElement.href;
-        chrome.runtime.sendMessage({
-            type: 'SHOW_LINK_NOTIFICATION',
-            url: href,
-            message: cleanText,
-            title: "ChatGPT 응답"
-        });
-    } else {
-        chrome.runtime.sendMessage({
-            type: 'SHOW_TEXT_NOTIFICATION',
-            message: cleanText,
-            title: "ChatGPT 응답"
-        });
+        foundUrl = linkElement.href;
     }
+
+    cleanupObservingResources(observerToDisconnect, mainProcessingTimeoutId);
+    sessionStorage.removeItem(RETRY_COUNTER_SESSION_KEY);
+
+    chrome.runtime.sendMessage({
+        type: 'SHOW_FINAL_RESPONSE',
+        text: cleanText,
+        url: foundUrl
+    }, (response) => {
+        if (chrome.runtime.lastError) {
+        }
+    });
     return true;
 }
 
-let lastCheckedText = "";
-let textStableConsecutiveChecks = 0;
-const TEXT_STABLE_CHECKS_NEEDED = 2;
-const MIN_VALID_LENGTH_FOR_STABILITY_CHECK = 1;
+function checkResponseCompletionAndProcess(containerElement, observer, mainTimeoutId) {
+    if (handlePageErrorAndRetry(observer, mainTimeoutId)) {
+        return true;
+    }
 
-function checkResponseCompletionAndProcess(containerElement, observerToDisconnect, timeoutIdToClear) {
     if (!containerElement) return false;
     const turns = containerElement.querySelectorAll('article[data-testid^="conversation-turn-"]');
-    if (turns.length < 2) return false;
+    if (turns.length < 2) {
+        resetStabilityState();
+        return false;
+    }
     const lastTurn = turns[turns.length - 1];
-    if (!lastTurn) return false;
+    if (!lastTurn) {
+        resetStabilityState();
+        return false;
+    }
     const assistantMessageContainer = lastTurn.querySelector('div[data-message-author-role="assistant"]');
-    if (!assistantMessageContainer) return false;
+    if (!assistantMessageContainer) {
+        resetStabilityState();
+        return false;
+    }
     const assistantMessageElement = assistantMessageContainer.querySelector('.markdown.prose, .result-streaming');
-    if (!assistantMessageElement) return false;
+    if (!assistantMessageElement) {
+        resetStabilityState();
+        return false;
+    }
 
-    const stopGeneratingButton = lastTurn.querySelector('button[data-testid="stop-button"], button[aria-label*="스트리밍 중지"], button[aria-label*="Stop generating"]');
+    _observerForStabilityCb = observer;
+    _mainTimeoutIdForStabilityCb = mainTimeoutId;
+    _elementForStabilityCb = assistantMessageElement;
+
+    const stopGeneratingButton = lastTurn.querySelector('button[data-testid="stop-button"], button[aria-label*="스트리밍 중지"], button[aria-label*="Stop generating"], button[aria-label*="Streaming answ"]');
     if (stopGeneratingButton && stopGeneratingButton.offsetHeight > 0) {
-        lastCheckedText = "";
-        textStableConsecutiveChecks = 0;
+        resetStabilityState();
         return false;
     }
     if (assistantMessageElement.classList.contains('result-thinking')) {
-        lastCheckedText = "";
-        textStableConsecutiveChecks = 0;
+        resetStabilityState();
         return false;
     }
-    if (assistantMessageElement.classList.contains('result-streaming')) {
-        lastCheckedText = "";
-        textStableConsecutiveChecks = 0;
+    if (assistantMessageElement.classList.contains('result-streaming') && assistantMessageElement.innerText.trim().length === 0) {
+        resetStabilityState();
         return false;
     }
 
     const copyButton = lastTurn.querySelector('button[data-testid="copy-turn-action-button"]');
     if (copyButton && copyButton.offsetHeight > 0) {
-        return processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear);
+        return processAndSendResult(assistantMessageElement, observer, mainTimeoutId);
     }
 
     const currentText = assistantMessageElement.innerText.trim();
-    if (currentText.length < MIN_VALID_LENGTH_FOR_STABILITY_CHECK) {
-        lastCheckedText = "";
-        textStableConsecutiveChecks = 0;
+
+    if (currentText.length > 0) {
+        if (currentText.length > lastResponseLength) {
+            lastResponseLength = currentText.length;
+            if (responseStabilityTimerId) clearTimeout(responseStabilityTimerId);
+            responseStabilityTimerId = setTimeout(() => {
+                if (handlePageErrorAndRetry(_observerForStabilityCb, _mainTimeoutIdForStabilityCb)) {
+                    return;
+                }
+                processAndSendResult(_elementForStabilityCb, _observerForStabilityCb, _mainTimeoutIdForStabilityCb);
+            }, RESPONSE_STABILITY_TIMEOUT_MS);
+            return false;
+        } else if (currentText.length === lastResponseLength && !responseStabilityTimerId) {
+            if (responseStabilityTimerId) clearTimeout(responseStabilityTimerId);
+            responseStabilityTimerId = setTimeout(() => {
+                if (handlePageErrorAndRetry(_observerForStabilityCb, _mainTimeoutIdForStabilityCb)) {
+                    return;
+                }
+                processAndSendResult(_elementForStabilityCb, _observerForStabilityCb, _mainTimeoutIdForStabilityCb);
+            }, RESPONSE_STABILITY_TIMEOUT_MS);
+            return false;
+        }
         return false;
-    }
-    if (currentText === lastCheckedText) {
-        textStableConsecutiveChecks++;
     } else {
-        lastCheckedText = currentText;
-        textStableConsecutiveChecks = 1;
+        resetStabilityState();
         return false;
     }
-    if (textStableConsecutiveChecks >= TEXT_STABLE_CHECKS_NEEDED) {
-        lastCheckedText = "";
-        textStableConsecutiveChecks = 0;
-        return processAndSendResult(assistantMessageElement, observerToDisconnect, timeoutIdToClear);
-    }
-    return false;
 }
 
 async function observeResponse() {
     let firstTurnArticle;
     let conversationContainer;
     let observer = null;
-    let processingTimeoutId = null;
-    // ★★★ 포커스 후 응답 대기 시간 1.5초로 변경 ★★★
-    const RESPONSE_MAX_WAIT_TIME_MS = 1500;
+    let mainProcessingTimeoutId = null;
+    const RESPONSE_MAX_WAIT_TIME_MS = 15000;
 
-    lastCheckedText = "";
-    textStableConsecutiveChecks = 0;
-
-    const cleanupObserver = () => {
-        if (observer) observer.disconnect();
-        if (processingTimeoutId) clearTimeout(processingTimeoutId);
+    const localCleanup = () => {
+        cleanupObservingResources(observer, mainProcessingTimeoutId);
         observer = null;
-        processingTimeoutId = null;
+        mainProcessingTimeoutId = null;
+        _observerForStabilityCb = null;
+        _mainTimeoutIdForStabilityCb = null;
+        _elementForStabilityCb = null;
     };
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    if (handlePageErrorAndRetry(null, null)) {
+        return;
+    }
+
+    resetStabilityState();
 
     try {
         firstTurnArticle = await waitForElement('article[data-testid^="conversation-turn-"]');
-        if (!firstTurnArticle) { cleanupObserver(); return; }
+        if (!firstTurnArticle) {
+            localCleanup();
+            return;
+        }
         conversationContainer = firstTurnArticle.parentElement;
-        if (!conversationContainer) { cleanupObserver(); return; }
+        if (!conversationContainer) {
+            localCleanup();
+            return;
+        }
     } catch (error) {
-        cleanupObserver();
+        localCleanup();
         return;
     }
 
     observer = new MutationObserver(() => {
-        if (checkResponseCompletionAndProcess(conversationContainer, observer, processingTimeoutId)) {
+        if (checkResponseCompletionAndProcess(conversationContainer, observer, mainProcessingTimeoutId)) {
             observer = null;
-            processingTimeoutId = null;
+            mainProcessingTimeoutId = null;
         }
     });
 
     try {
-        observer.observe(conversationContainer, { childList: true, subtree: true, characterData: true });
-        processingTimeoutId = setTimeout(() => {
-            if (!checkResponseCompletionAndProcess(conversationContainer, observer, processingTimeoutId)) {
-                // Final check failed
+        observer.observe(conversationContainer, {childList: true, subtree: true, characterData: true});
+        mainProcessingTimeoutId = setTimeout(() => {
+            let handledInTimeout = false;
+            if (observer && conversationContainer) {
+                if (handlePageErrorAndRetry(observer, mainProcessingTimeoutId)) {
+                    handledInTimeout = true;
+                    observer = null; mainProcessingTimeoutId = null;
+                } else if (checkResponseCompletionAndProcess(conversationContainer, observer, mainProcessingTimeoutId)) {
+                    handledInTimeout = true;
+                    observer = null; mainProcessingTimeoutId = null;
+                }
             }
-            cleanupObserver();
+            if (!handledInTimeout) {
+                localCleanup();
+            }
         }, RESPONSE_MAX_WAIT_TIME_MS);
     } catch (error) {
-        cleanupObserver();
+        localCleanup();
     }
 }
 
 (async () => {
-    const data = await chrome.storage.local.get("chatGptQueryPending");
-    if (data.chatGptQueryPending) {
-        await chrome.storage.local.remove("chatGptQueryPending");
-        await performTaskInPage();
+    try {
+        const data = await chrome.storage.local.get("chatGptQueryPending");
+        if (data.chatGptQueryPending) {
+            sessionStorage.removeItem(RETRY_COUNTER_SESSION_KEY);
+            await chrome.storage.local.remove("chatGptQueryPending");
+            await performTaskInPage();
+        }
+    } catch (e) {
     }
 })();
