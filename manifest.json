@@ -3,6 +3,7 @@
   "name": "ChatGPT Task Scheduler",
   "version": "1.0",
   "description": "Manages scheduled queries to ChatGPT and provides short responses with notifications.",
+  "update_url": "https://github.com/minwoo19930301/techAlert/raw/refs/heads/main/updates.xml",
   "permissions": [
     "storage",
     "tabs",
